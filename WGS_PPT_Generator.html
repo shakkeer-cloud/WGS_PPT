@@ -434,35 +434,53 @@ function refreshPreview(){
 
 // ── Image loading: canvas first (works file://), fallback to path URL for PowerPoint ──
 var imgCache={};
+// Proxy URL to bypass CORS
+function proxyUrl(url){
+  return 'https://corsproxy.io/?'+encodeURIComponent(url);
+}
+
 function loadImgB64(url){
   if(!url) return Promise.resolve({type:'none'});
   if(imgCache[url]!==undefined) return Promise.resolve(imgCache[url]);
-  // Try canvas first, immediately fall back to path: if CORS blocked
+
+  // Try loading via CORS proxy → canvas → base64
   return new Promise(function(resolve){
-    var img=new Image();
-    img.crossOrigin='anonymous';
     var resolved=false;
-    function fallback(){
-      if(!resolved){ resolved=true; imgCache[url]={type:'path',url:url}; resolve(imgCache[url]); }
+    function done(result){ if(!resolved){ resolved=true; imgCache[url]=result; resolve(result); } }
+
+    function tryLoad(src, isFallback){
+      var img=new Image();
+      img.crossOrigin='anonymous';
+      var timer=setTimeout(function(){
+        if(!isFallback) tryLoad(proxyUrl(url), true);
+        else done({type:'none'});
+      }, 8000);
+      img.onload=function(){
+        clearTimeout(timer);
+        if(resolved) return;
+        try{
+          var c=document.createElement('canvas');
+          var scale=Math.min(1,800/Math.max(img.naturalWidth,img.naturalHeight,1));
+          c.width=Math.round(img.naturalWidth*scale);
+          c.height=Math.round(img.naturalHeight*scale);
+          c.getContext('2d').drawImage(img,0,0,c.width,c.height);
+          var b64=c.toDataURL('image/jpeg',0.85).split(',')[1];
+          done({type:'data', data:'image/jpeg;base64,'+b64});
+        } catch(e){
+          // Canvas tainted - try proxy if not already
+          if(!isFallback) tryLoad(proxyUrl(url), true);
+          else done({type:'none'});
+        }
+      };
+      img.onerror=function(){
+        clearTimeout(timer);
+        if(!isFallback) tryLoad(proxyUrl(url), true);
+        else done({type:'none'});
+      };
+      img.src=src;
     }
-    var timer=setTimeout(fallback, 3000);
-    img.onload=function(){
-      clearTimeout(timer);
-      if(resolved) return;
-      try{
-        var c=document.createElement('canvas');
-        var scale=Math.min(1,600/Math.max(img.naturalWidth,img.naturalHeight,1));
-        c.width=Math.round(img.naturalWidth*scale);
-        c.height=Math.round(img.naturalHeight*scale);
-        c.getContext('2d').drawImage(img,0,0,c.width,c.height);
-        var b64=c.toDataURL('image/jpeg',0.82).split(',')[1];
-        resolved=true; clearTimeout(timer);
-        imgCache[url]={type:'data',data:'image/jpeg;base64,'+b64};
-        resolve(imgCache[url]);
-      } catch(e){ fallback(); }
-    };
-    img.onerror=function(){ clearTimeout(timer); fallback(); };
-    img.src=url;
+
+    tryLoad(url, false);
   });
 }
 
@@ -496,10 +514,13 @@ function loadFlag(row){
 }
 
 async function preloadBatch(urls,onProg){
-  // Skip canvas pre-loading (CORS blocked) - images will load via path: in PowerPoint
   var unique=[...new Set(urls.filter(Boolean))];
-  unique.forEach(function(u){ imgCache[u]={type:'path',url:u}; });
-  onProg(unique.length, unique.length);
+  var BATCH=6;
+  for(var i=0;i<unique.length;i+=BATCH){
+    await Promise.all(unique.slice(i,i+BATCH).map(loadImgB64));
+    onProg(Math.min(i+BATCH,unique.length),unique.length);
+    await yld();
+  }
 }
 
 // ── Placeholder helpers — clean box only, no icons ──
