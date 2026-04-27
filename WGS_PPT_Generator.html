@@ -378,7 +378,7 @@ function getFiltered(){
 function groupByProgram(rows){
   var C=cols(); var m=new Map();
   rows.forEach(function(r){
-    var key=(r[C.program]||'').trim(); if(!key) return;
+    var key=(r[C.program]||'').trim().replace(/\s+$/,''); if(!key) return;
     if(!m.has(key)) m.set(key,{program:key,type:(r['Type']||'').trim(),rows:[],sessions:new Set(),seen:new Set()});
     var g=m.get(key);
     // Deduplicate by name + designation
@@ -392,6 +392,8 @@ function groupByProgram(rows){
     var s=(r['Session EN']||'').trim(); if(s) g.sessions.add(s);
   });
   m.forEach(function(g){
+    // Sort rows by Sub Category BEFORE brief/dedup so VVIP rows come first
+    g.rows.sort(catSort);
     var C2=cols();
     var br=g.rows.find(function(r){ return (r[C2.brief]||'').trim(); });
     g.brief=br?(br[C2.brief]||'').trim():'';
@@ -436,7 +438,8 @@ function refreshPreview(){
 var imgCache={};
 // Proxy URL to bypass CORS
 function proxyUrl(url){
-  return 'https://corsproxy.io/?'+encodeURIComponent(url);
+  // images.weserv.nl is purpose-built for image proxying with CORS
+  return 'https://images.weserv.nl/?url='+encodeURIComponent(url.replace('https://','').replace('http://',''))+'&output=jpg&q=85';
 }
 
 function loadImgB64(url){
@@ -505,7 +508,7 @@ function loadFlag(row){
   if(!code||code.length>3) return Promise.resolve(null);
   if(flagCache[code]!==undefined) return Promise.resolve(flagCache[code]);
   // Try canvas load — only works if flagcdn.com allows CORS (it does)
-  return loadImgB64('https://flagcdn.com/w80/'+code+'.png')
+  return loadImgB64('https://images.weserv.nl/?url=flagcdn.com/w80/'+code+'.png&output=png')
     .then(function(r){
       // Only use if we got actual data, not path fallback
       var result = (r && r.type==='data') ? r : null;
@@ -600,16 +603,14 @@ async function generate(){
     if(typeFilter){
       var s0=pres.addSlide();
       s0.background={color:NAVY};
-      // Top & bottom bars
-      s0.addImage({data:BAR_DATA, x:0, y:0.01, w:13.33, h:0.18});
-      s0.addImage({data:BAR_DATA, x:0, y:7.32, w:13.33, h:0.18});
-      // Left image placeholder (dark blue box)
-      s0.addShape('rect',{x:0,y:0,w:6.662,h:7.5, fill:{color:'0A1F33'}, line:{color:'1A3A55',width:1}});
-      // Type name right side, white, large
+      // Top & bottom teal bars
+      s0.addShape('rect',{x:0,y:0,   w:13.33,h:0.20, fill:{color:'156082'}, line:{color:'156082',width:0}});
+      s0.addShape('rect',{x:0,y:7.30,w:13.33,h:0.20, fill:{color:'156082'}, line:{color:'156082',width:0}});
+      // Type name fully centered on navy background
       s0.addText(typeFilter,{
-        x:7.00, y:2.50, w:5.90, h:2.50,
-        fontSize:44, bold:true, color:WHITE, fontFace:FT,
-        align:'left', valign:'middle', margin:0
+        x:0.50, y:2.50, w:12.33, h:2.50,
+        fontSize:52, bold:true, color:WHITE, fontFace:FT,
+        align:'center', valign:'middle', margin:0
       });
     }
 
@@ -628,8 +629,8 @@ async function generate(){
       var cardXs=photosLeft?CXL_L:CXL_R;
 
       // Bars
-      slide.addImage({data:BAR_DATA, x:0, y:0.01, w:13.33, h:0.18});
-      slide.addImage({data:BAR_DATA, x:0, y:7.32, w:13.33, h:0.18});
+      slide.addShape('rect',{x:0,y:0,   w:13.33,h:0.20, fill:{color:'156082'}, line:{color:'156082',width:0}});
+      slide.addShape('rect',{x:0,y:7.30,w:13.33,h:0.20, fill:{color:'156082'}, line:{color:'156082',width:0}});
 
       // ── 2×3 photo grid — flush, zero gaps ──
       var sorted=g.rows.slice().sort(catSort);
@@ -658,8 +659,8 @@ async function generate(){
       if(g.brief&&g.brief.trim()){
         slide.addText(g.brief.replace(/\n/g,' ').replace(/\s+/g,' ').trim().substring(0,350),{
           x:CX,y:1.439,w:CW,h:1.403,
-          fontSize:8.5,color:NAVY,fontFace:FB,
-          align:txtAlign,valign:'top',lineSpacingMultiple:1.3,margin:0
+          fontSize:8,color:NAVY,fontFace:FB,
+          align:txtAlign,valign:'top',lineSpacingMultiple:1.2,margin:0
         });
       }
 
