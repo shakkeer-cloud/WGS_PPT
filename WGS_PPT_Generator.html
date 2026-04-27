@@ -466,18 +466,17 @@ function loadImgB64(url){
   });
 }
 
-// Add image to slide — handles both base64 and path URL
+// Add image to slide — base64 only (path: causes XHR CORS errors in PptxGenJS)
 function addImg(slide, result, opts){
   if(!result||result.type==='none') return false;
-  try{
-    if(result.type==='data'){
+  if(result.type==='data'){
+    try{
       slide.addImage(Object.assign({data:result.data},opts));
-    } else {
-      // path: PowerPoint fetches it on open (needs internet)
-      slide.addImage(Object.assign({path:result.url},opts));
-    }
-    return true;
-  } catch(e){ return false; }
+      return true;
+    } catch(e){ return false; }
+  }
+  // path: type skipped — PptxGenJS XHR is CORS blocked
+  return false;
 }
 
 // Flag: Column AP = 'Flag SVG', value like 'AE.ai' → strip .ai → flagcdn
@@ -487,8 +486,13 @@ function loadFlag(row){
   var code=raw.replace(/\.ai$/i,'').toLowerCase().trim();
   if(!code||code.length>3) return Promise.resolve(null);
   if(flagCache[code]!==undefined) return Promise.resolve(flagCache[code]);
+  // Try canvas load — only works if flagcdn.com allows CORS (it does)
   return loadImgB64('https://flagcdn.com/w80/'+code+'.png')
-    .then(function(r){ flagCache[code]=r; return r; });
+    .then(function(r){
+      // Only use if we got actual data, not path fallback
+      var result = (r && r.type==='data') ? r : null;
+      flagCache[code]=result; return result;
+    });
 }
 
 async function preloadBatch(urls,onProg){
