@@ -284,7 +284,7 @@ function setLang(lang){
 }
 
 // Exact Sub Category values from CSV
-var CAT_ORDER = {'VVIP':0,'VIP':1,'General participant':2,'General':3,'':4};
+var CAT_ORDER = {'VVIP':0,'VIP':1,'General participant':2,'General Participants':2,'General Participant':2,'General':3,'':4};
 function catSort(a,b){ return (CAT_ORDER[a['Sub Category']]||4)-(CAT_ORDER[b['Sub Category']]||4); }
 
 document.addEventListener('DOMContentLoaded', function(){
@@ -376,28 +376,37 @@ function getFiltered(){
 
 // ── Group by program, deduplicate participants by name+designation ──
 function groupByProgram(rows){
+  // rows is already filtered by the user's Day/Type/Program selection
   var C=cols(); var m=new Map();
+
+  // Step 1: collect all rows per program (no dedup yet)
   rows.forEach(function(r){
     var key=(r[C.program]||'').trim().replace(/\s+$/,''); if(!key) return;
-    if(!m.has(key)) m.set(key,{program:key,type:(r['Type']||'').trim(),rows:[],sessions:new Set(),seen:new Set()});
+    if(!m.has(key)) m.set(key,{program:key,type:(r['Type']||'').trim(),rows:[],sessions:new Set()});
     var g=m.get(key);
-    // Deduplicate by name + designation
-    var nm  =(r['Participant Name EN']||'').trim();
-    var des =(r['Export Desc En']||'').trim();
-    var dupKey=nm+'||'+des;
-    if(!g.seen.has(dupKey)){
-      g.seen.add(dupKey);
-      g.rows.push(r);
-    }
+    g.rows.push(r);
     var s=(r['Session EN']||'').trim(); if(s) g.sessions.add(s);
   });
+
+  // Step 2: for each program — sort by priority, then deduplicate
   m.forEach(function(g){
-    // Sort rows by Sub Category BEFORE brief/dedup so VVIP rows come first
+    // Sort VVIP → VIP → General participant → General
     g.rows.sort(catSort);
+    // Deduplicate by name+designation (keep first = highest priority)
+    var seen=new Set(); var deduped=[];
+    g.rows.forEach(function(r){
+      var nm=(r['Participant Name EN']||'').trim();
+      var de=(r['Export Desc En']||'').trim();
+      var dk=nm+'||'+de;
+      if(nm && !seen.has(dk)){ seen.add(dk); deduped.push(r); }
+    });
+    g.rows=deduped;
+    // Use first session brief from filtered rows
     var C2=cols();
     var br=g.rows.find(function(r){ return (r[C2.brief]||'').trim(); });
     g.brief=br?(br[C2.brief]||'').trim():'';
   });
+
   return Array.from(m.values());
 }
 
