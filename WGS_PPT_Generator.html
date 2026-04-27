@@ -437,36 +437,31 @@ var imgCache={};
 function loadImgB64(url){
   if(!url) return Promise.resolve({type:'none'});
   if(imgCache[url]!==undefined) return Promise.resolve(imgCache[url]);
+  // Try canvas first, immediately fall back to path: if CORS blocked
   return new Promise(function(resolve){
     var img=new Image();
     img.crossOrigin='anonymous';
-    var timer=setTimeout(function(){
-      // Canvas timed out — store URL for path fallback
-      imgCache[url]={type:'path', url:url};
-      resolve(imgCache[url]);
-    },8000);
+    var resolved=false;
+    function fallback(){
+      if(!resolved){ resolved=true; imgCache[url]={type:'path',url:url}; resolve(imgCache[url]); }
+    }
+    var timer=setTimeout(fallback, 3000);
     img.onload=function(){
       clearTimeout(timer);
+      if(resolved) return;
       try{
         var c=document.createElement('canvas');
         var scale=Math.min(1,600/Math.max(img.naturalWidth,img.naturalHeight,1));
-        c.width =Math.round(img.naturalWidth *scale);
+        c.width=Math.round(img.naturalWidth*scale);
         c.height=Math.round(img.naturalHeight*scale);
         c.getContext('2d').drawImage(img,0,0,c.width,c.height);
         var b64=c.toDataURL('image/jpeg',0.82).split(',')[1];
-        imgCache[url]={type:'data', data:'image/jpeg;base64,'+b64};
+        resolved=true; clearTimeout(timer);
+        imgCache[url]={type:'data',data:'image/jpeg;base64,'+b64};
         resolve(imgCache[url]);
-      } catch(e){
-        // Tainted canvas — use path fallback
-        imgCache[url]={type:'path', url:url};
-        resolve(imgCache[url]);
-      }
+      } catch(e){ fallback(); }
     };
-    img.onerror=function(){
-      clearTimeout(timer);
-      imgCache[url]={type:'path', url:url};
-      resolve(imgCache[url]);
-    };
+    img.onerror=function(){ clearTimeout(timer); fallback(); };
     img.src=url;
   });
 }
@@ -497,13 +492,10 @@ function loadFlag(row){
 }
 
 async function preloadBatch(urls,onProg){
+  // Skip canvas pre-loading (CORS blocked) - images will load via path: in PowerPoint
   var unique=[...new Set(urls.filter(Boolean))];
-  var BATCH=8;
-  for(var i=0;i<unique.length;i+=BATCH){
-    await Promise.all(unique.slice(i,i+BATCH).map(loadImgB64));
-    onProg(Math.min(i+BATCH,unique.length),unique.length);
-    await yld();
-  }
+  unique.forEach(function(u){ imgCache[u]={type:'path',url:u}; });
+  onProg(unique.length, unique.length);
 }
 
 // ── Placeholder helpers — clean box only, no icons ──
