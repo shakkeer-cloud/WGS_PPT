@@ -401,6 +401,9 @@ function groupByProgram(rows){
       if(nm && !seen.has(dk)){ seen.add(dk); deduped.push(r); }
     });
     g.rows=deduped;
+    // DEBUG: log top 4 for each program
+    console.log('Program: '+g.program+' | top 4:');
+    g.rows.slice(0,4).forEach(function(r){ console.log('  ['+r['Sub Category']+'] '+r['Participant Name EN']); });
     // Use first session brief from filtered rows
     var C2=cols();
     var br=g.rows.find(function(r){ return (r[C2.brief]||'').trim(); });
