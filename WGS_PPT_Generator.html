@@ -285,7 +285,7 @@ function setLang(lang){
 
 // Exact Sub Category values from CSV
 var CAT_ORDER = {'VVIP':0,'VIP':1,'General participant':2,'General Participants':2,'General Participant':2,'General':3,'':4};
-function catSort(a,b){ return (CAT_ORDER[a['Sub Category']]||4)-(CAT_ORDER[b['Sub Category']]||4); }
+function catSort(a,b){ var x=CAT_ORDER[a['Sub Category']]; var y=CAT_ORDER[b['Sub Category']]; return (x!==undefined?x:4)-(y!==undefined?y:4); }
 
 document.addEventListener('DOMContentLoaded', function(){
   var uz=document.getElementById('upzone');
