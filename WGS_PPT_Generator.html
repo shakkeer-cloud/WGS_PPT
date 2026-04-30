@@ -390,6 +390,8 @@ function groupByProgram(rows){
 
   // Step 2: for each program — sort by priority, then deduplicate
   m.forEach(function(g){
+    // Store original CSV order for brief lookup
+    g.origRows=g.rows.slice();
     // Sort VVIP → VIP → General participant → General
     g.rows.sort(catSort);
     // Deduplicate by name+designation (keep first = highest priority)
@@ -401,12 +403,11 @@ function groupByProgram(rows){
       if(nm && !seen.has(dk)){ seen.add(dk); deduped.push(r); }
     });
     g.rows=deduped;
-    // DEBUG: log top 4 for each program
-    console.log('Program: '+g.program+' | top 4:');
-    g.rows.slice(0,4).forEach(function(r){ console.log('  ['+r['Sub Category']+'] '+r['Participant Name EN']); });
-    // Use first session brief from filtered rows
+    // Use first non-empty brief in original CSV row order
     var C2=cols();
-    var br=g.rows.find(function(r){ return (r[C2.brief]||'').trim(); });
+    // g.origRows preserves CSV order before sort
+    var briefRows=g.origRows||g.rows;
+    var br=briefRows.find(function(r){ return (r[C2.brief]||'').trim(); });
     g.brief=br?(br[C2.brief]||'').trim():'';
   });
 
@@ -450,8 +451,8 @@ function refreshPreview(){
 var imgCache={};
 // Proxy URL to bypass CORS
 function proxyUrl(url){
-  // images.weserv.nl: strip protocol, no encoding of the url itself
-  var clean=url.replace(/^https?:\/\//,'');
+  // images.weserv.nl: strip protocol, encode spaces in filename
+  var clean=url.replace(/^https?:\/\//,'').replace(/ /g,'%20');
   return 'https://images.weserv.nl/?url='+clean+'&output=jpg&q=85&w=400';
 }
 
@@ -540,8 +541,9 @@ async function preloadBatch(urls,onProg){
 }
 
 // ── Placeholder helpers — clean box only, no icons ──
-function addPicPlaceholder(slide,x,y,w,h){
-  slide.addShape('rect',{x:x,y:y,w:w,h:h, fill:{color:'D6E4ED'}, line:{color:'D6E4ED',width:0}});
+function addPicPlaceholder(slide,x,y,w,h,alt){
+  var col=alt?'C2D9E8':'D6E4ED';
+  slide.addShape('rect',{x:x,y:y,w:w,h:h, fill:{color:col}, line:{color:col,width:0}});
 }
 function addCirclePlaceholder(slide,x,y,w,h){
   slide.addShape('ellipse',{x:x,y:y,w:w,h:h, fill:{color:'D6E4ED'}, line:{color:'9BBDD1',width:1.5}});
@@ -607,9 +609,9 @@ async function generate(){
   var CXL_L=[7.293,8.793,10.289,11.785];
   var CXL_R=[0.570,2.070,3.570,5.070];
   var CPW=0.987, CPH=0.988;
-  var FLW=0.55, FLH=0.33;
+  var FLW=0.33, FLH=0.20;
   var TXW=1.305, TXH=0.95;
-  var FLY=4.793, PHY=5.194, TXY=6.349;
+  var FLY=4.493, PHY=4.894, TXY=6.049;
 
   try{
     // ── Type title slide: dark navy bg, white text, image placeholder left ──
@@ -652,11 +654,12 @@ async function generate(){
         for(var col=0;col<2;col++){
           var px=pCols[col], py=GROW[row], pi=row*2+col;
           var imgR=(!skipPhotos&&g6[pi])?imgCache[g6[pi]['Photo With Path']]:null;
+          var checker=(row+col)%2===0;
           if(imgR&&imgR.type!=='none'){
             var added=addImg(slide,imgR,{x:px,y:py,w:GCW,h:GCH, sizing:{type:'cover',w:GCW,h:GCH}});
-            if(!added) addPicPlaceholder(slide,px,py,GCW,GCH);
+            if(!added) addPicPlaceholder(slide,px,py,GCW,GCH,checker);
           } else {
-            addPicPlaceholder(slide,px,py,GCW,GCH);
+            addPicPlaceholder(slide,px,py,GCW,GCH,checker);
           }
         }
       }
@@ -671,7 +674,7 @@ async function generate(){
       // Session brief
       if(g.brief&&g.brief.trim()){
         slide.addText(g.brief.replace(/\n/g,' ').replace(/\s+/g,' ').trim().substring(0,350),{
-          x:CX,y:1.22,w:CW,h:1.62,
+          x:CX,y:1.22,w:CW,h:1.85,
           fontSize:9,color:NAVY,fontFace:FB,
           align:txtAlign,valign:'top',lineSpacingMultiple:1.1,margin:0
         });
@@ -690,7 +693,7 @@ async function generate(){
 
       // Participants label
       slide.addText(isAR?'المشاركون:':'Participants:',{
-        x:CX,y:4.451,w:CW,h:0.286,
+        x:CX,y:4.151,w:CW,h:0.286,
         fontSize:9,bold:true,color:TEAL,fontFace:FT,align:txtAlign,margin:0
       });
 
