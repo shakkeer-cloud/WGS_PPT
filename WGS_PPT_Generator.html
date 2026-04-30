@@ -259,8 +259,8 @@ var ORANGE = 'E97132';
 var GREY   = '6B7280';
 var LGREY  = '9CA3AF';
 var WHITE  = 'FFFFFF';
-var FT     = 'Certo Sans';
-var FB     = 'Logical';
+var FT='Certo Sans'; var FB='Logical';
+var FTA='ITC Handel Gothic Arabic - Bold'; var FBA='SST Arabic - Roman';
 
 function cols(){
   if(currentLang==='ar') return {
@@ -435,7 +435,7 @@ function refreshPreview(){
     var jt=(r['Participant Title EN']||'').trim();
     var nm=(jt?jt+' ':'')+(r['Participant Name EN']||'');
     var ph=r['Photo With Path']||'';
-    d.innerHTML=ph?'<img src="'+ph+'" onerror="this.style.display=\'none\'" alt=""/><div class="ph2" style="display:none">👤</div>':'<div class="ph2">👤</div>';
+    d.innerHTML=ph?'<img src="'+ph+'" crossorigin="anonymous" onerror="this.style.display=\'none\'" alt=""/><div class="ph2" style="display:none">👤</div>':'<div class="ph2">👤</div>';
     d.innerHTML+='<div class="pn">'+nm.trim()+'</div><div class="pr">'+(r['Export Desc En']||'')+'</div>';
     grid.appendChild(d);
   });
@@ -449,9 +449,30 @@ function refreshPreview(){
 
 // ── Image loading: canvas first (works file://), fallback to path URL for PowerPoint ──
 var imgCache={};
-// Proxy URL to bypass CORS
+// Capture image from already-loaded DOM <img> element (bypasses CORS completely)
+function captureImgFromDOM(url){
+  if(!url) return null;
+  // Find any <img> in the page that has this src loaded
+  var imgs=document.querySelectorAll('img');
+  for(var i=0;i<imgs.length;i++){
+    var img=imgs[i];
+    if((img.src===url||img.src===decodeURIComponent(url))&&img.complete&&img.naturalWidth>0){
+      try{
+        var c=document.createElement('canvas');
+        var scale=Math.min(1,600/Math.max(img.naturalWidth,img.naturalHeight,1));
+        c.width=Math.round(img.naturalWidth*scale);
+        c.height=Math.round(img.naturalHeight*scale);
+        c.getContext('2d').drawImage(img,0,0,c.width,c.height);
+        var b64=c.toDataURL('image/jpeg',0.85).split(',')[1];
+        return {type:'data',data:'image/jpeg;base64,'+b64};
+      } catch(e){ return null; }
+    }
+  }
+  return null;
+}
+
+// Proxy URL for fresh loads
 function proxyUrl(url){
-  // images.weserv.nl: strip protocol, encode spaces in filename
   var clean=url.replace(/^https?:\/\//,'').replace(/ /g,'%20');
   return 'https://images.weserv.nl/?url='+clean+'&output=jpg&q=85&w=400';
 }
@@ -460,7 +481,11 @@ function loadImgB64(url){
   if(!url) return Promise.resolve({type:'none'});
   if(imgCache[url]!==undefined) return Promise.resolve(imgCache[url]);
 
-  // Try loading via CORS proxy → canvas → base64
+  // Step 1: try capturing from already-rendered DOM img (no CORS issue)
+  var domResult=captureImgFromDOM(url);
+  if(domResult){ imgCache[url]=domResult; return Promise.resolve(domResult); }
+
+  // Step 2: load fresh with crossOrigin + canvas, proxy fallback
   return new Promise(function(resolve){
     var resolved=false;
     function done(result){ if(!resolved){ resolved=true; imgCache[url]=result; resolve(result); } }
@@ -469,35 +494,28 @@ function loadImgB64(url){
       var img=new Image();
       img.crossOrigin='anonymous';
       var timer=setTimeout(function(){
-        if(!isFallback) tryLoad(proxyUrl(url), true);
+        if(!isFallback) tryLoad(proxyUrl(url),true);
         else done({type:'none'});
-      }, 8000);
+      },8000);
       img.onload=function(){
-        clearTimeout(timer);
-        if(resolved) return;
+        clearTimeout(timer); if(resolved) return;
         try{
           var c=document.createElement('canvas');
-          var scale=Math.min(1,800/Math.max(img.naturalWidth,img.naturalHeight,1));
+          var scale=Math.min(1,600/Math.max(img.naturalWidth,img.naturalHeight,1));
           c.width=Math.round(img.naturalWidth*scale);
           c.height=Math.round(img.naturalHeight*scale);
           c.getContext('2d').drawImage(img,0,0,c.width,c.height);
           var b64=c.toDataURL('image/jpeg',0.85).split(',')[1];
-          done({type:'data', data:'image/jpeg;base64,'+b64});
+          done({type:'data',data:'image/jpeg;base64,'+b64});
         } catch(e){
-          // Canvas tainted - try proxy if not already
-          if(!isFallback) tryLoad(proxyUrl(url), true);
+          if(!isFallback) tryLoad(proxyUrl(url),true);
           else done({type:'none'});
         }
       };
-      img.onerror=function(){
-        clearTimeout(timer);
-        if(!isFallback) tryLoad(proxyUrl(url), true);
-        else done({type:'none'});
-      };
+      img.onerror=function(){ clearTimeout(timer); if(!isFallback) tryLoad(proxyUrl(url),true); else done({type:'none'}); };
       img.src=src;
     }
-
-    tryLoad(url, false);
+    tryLoad(url,false);
   });
 }
 
@@ -667,16 +685,16 @@ async function generate(){
       // Program title
       slide.addText(g.program||'',{
         x:CX,y:0.399,w:CW,h:0.771,
-        fontSize:18,bold:true,color:TEAL,fontFace:FT,
-        align:txtAlign,valign:'middle',margin:0
+        fontSize:18,bold:true,color:TEAL,fontFace:isAR?FTA:FT,
+        align:txtAlign,valign:'middle',margin:0,rtlMode:isAR
       });
 
       // Session brief
       if(g.brief&&g.brief.trim()){
-        slide.addText(g.brief.replace(/\n/g,' ').replace(/\s+/g,' ').trim().substring(0,350),{
+        slide.addText(g.brief.replace(/\n/g,' ').replace(/\s+/g,' ').trim(),{
           x:CX,y:1.22,w:CW,h:1.85,
-          fontSize:9,color:NAVY,fontFace:FB,
-          align:txtAlign,valign:'top',lineSpacingMultiple:1.1,margin:0
+          fontSize:9,color:NAVY,fontFace:isAR?FBA:FB,
+          align:txtAlign,valign:'top',lineSpacingMultiple:1.1,margin:0,rtlMode:isAR
         });
       }
 
@@ -686,15 +704,15 @@ async function generate(){
       var lbl1=overLbl1||(isAR?'جلسة':'Sessions');
       var lbl2=overLbl2||(isAR?'مشارك':'Participants');
 
-      slide.addText(num1,{x:CX,      y:3.330,w:2.60,h:0.420,fontSize:26,bold:true, color:TEAL,  fontFace:FT,align:txtAlign,margin:0});
-      slide.addText(lbl1,{x:CX,      y:3.760,w:2.60,h:0.260,fontSize:8, bold:false,color:LGREY, fontFace:FB,align:txtAlign,margin:0});
-      slide.addText(num2,{x:CX+3.00, y:3.330,w:2.60,h:0.420,fontSize:26,bold:true, color:ORANGE,fontFace:FT,align:txtAlign,margin:0});
-      slide.addText(lbl2,{x:CX+3.00, y:3.760,w:2.60,h:0.260,fontSize:8, bold:false,color:LGREY, fontFace:FB,align:txtAlign,margin:0});
+      slide.addText(num1,{x:isAR?CX+3.00:CX, y:3.130,w:2.60,h:0.420,fontSize:26,bold:true, color:TEAL,  fontFace:isAR?FTA:FT,align:txtAlign,margin:0,rtlMode:isAR});
+      slide.addText(lbl1,{x:isAR?CX+3.00:CX, y:3.560,w:2.60,h:0.260,fontSize:8, bold:false,color:LGREY, fontFace:isAR?FBA:FB,align:txtAlign,margin:0,rtlMode:isAR});
+      slide.addText(num2,{x:isAR?CX:CX+3.00, y:3.130,w:2.60,h:0.420,fontSize:26,bold:true, color:ORANGE,fontFace:isAR?FTA:FT,align:txtAlign,margin:0,rtlMode:isAR});
+      slide.addText(lbl2,{x:isAR?CX:CX+3.00, y:3.560,w:2.60,h:0.260,fontSize:8, bold:false,color:LGREY, fontFace:isAR?FBA:FB,align:txtAlign,margin:0,rtlMode:isAR});
 
       // Participants label
       slide.addText(isAR?'المشاركون:':'Participants:',{
         x:CX,y:4.151,w:CW,h:0.286,
-        fontSize:9,bold:true,color:TEAL,fontFace:FT,align:txtAlign,margin:0
+        fontSize:9,bold:true,color:TEAL,fontFace:isAR?FTA:FT,align:txtAlign,margin:0,rtlMode:isAR
       });
 
       // ── 4 speaker cards ──
@@ -756,7 +774,7 @@ async function generate(){
         if(lines.length){
           slide.addText(lines,{
             x:kx-0.13,y:TXY,w:TXW,h:TXH,
-            align:'center',valign:'top',margin:0,lineSpacingMultiple:1.2
+            align:'center',valign:'top',margin:0,lineSpacingMultiple:1.2,rtlMode:isAR
           });
         }
       }
