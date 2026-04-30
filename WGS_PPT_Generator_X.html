@@ -284,8 +284,8 @@ function setLang(lang){
 }
 
 // Exact Sub Category values from CSV
-var CAT_ORDER = {'VVIP':0,'VIP':1,'General participant':2,'General':3,'':4};
-function catSort(a,b){ return (CAT_ORDER[a['Sub Category']]||4)-(CAT_ORDER[b['Sub Category']]||4); }
+var CAT_ORDER = {'VVIP':0,'VIP':1,'General participant':2,'General Participants':2,'General Participant':2,'General':3,'':4};
+function catSort(a,b){ var x=CAT_ORDER[a['Sub Category']]; var y=CAT_ORDER[b['Sub Category']]; return (x!==undefined?x:4)-(y!==undefined?y:4); }
 
 document.addEventListener('DOMContentLoaded', function(){
   var uz=document.getElementById('upzone');
@@ -376,26 +376,40 @@ function getFiltered(){
 
 // ── Group by program, deduplicate participants by name+designation ──
 function groupByProgram(rows){
+  // rows is already filtered by the user's Day/Type/Program selection
   var C=cols(); var m=new Map();
+
+  // Step 1: collect all rows per program (no dedup yet)
   rows.forEach(function(r){
-    var key=(r[C.program]||'').trim(); if(!key) return;
-    if(!m.has(key)) m.set(key,{program:key,type:(r['Type']||'').trim(),rows:[],sessions:new Set(),seen:new Set()});
+    var key=(r[C.program]||'').trim().replace(/\s+$/,''); if(!key) return;
+    if(!m.has(key)) m.set(key,{program:key,type:(r['Type']||'').trim(),rows:[],sessions:new Set()});
     var g=m.get(key);
-    // Deduplicate by name + designation
-    var nm  =(r['Participant Name EN']||'').trim();
-    var des =(r['Export Desc En']||'').trim();
-    var dupKey=nm+'||'+des;
-    if(!g.seen.has(dupKey)){
-      g.seen.add(dupKey);
-      g.rows.push(r);
-    }
+    g.rows.push(r);
     var s=(r['Session EN']||'').trim(); if(s) g.sessions.add(s);
   });
+
+  // Step 2: for each program — sort by priority, then deduplicate
   m.forEach(function(g){
+    // Sort VVIP → VIP → General participant → General
+    g.rows.sort(catSort);
+    // Deduplicate by name+designation (keep first = highest priority)
+    var seen=new Set(); var deduped=[];
+    g.rows.forEach(function(r){
+      var nm=(r['Participant Name EN']||'').trim();
+      var de=(r['Export Desc En']||'').trim();
+      var dk=nm+'||'+de;
+      if(nm && !seen.has(dk)){ seen.add(dk); deduped.push(r); }
+    });
+    g.rows=deduped;
+    // DEBUG: log top 4 for each program
+    console.log('Program: '+g.program+' | top 4:');
+    g.rows.slice(0,4).forEach(function(r){ console.log('  ['+r['Sub Category']+'] '+r['Participant Name EN']); });
+    // Use first session brief from filtered rows
     var C2=cols();
     var br=g.rows.find(function(r){ return (r[C2.brief]||'').trim(); });
     g.brief=br?(br[C2.brief]||'').trim():'';
   });
+
   return Array.from(m.values());
 }
 
@@ -434,55 +448,69 @@ function refreshPreview(){
 
 // ── Image loading: canvas first (works file://), fallback to path URL for PowerPoint ──
 var imgCache={};
+// Proxy URL to bypass CORS
+function proxyUrl(url){
+  // images.weserv.nl: strip protocol, no encoding of the url itself
+  var clean=url.replace(/^https?:\/\//,'');
+  return 'https://images.weserv.nl/?url='+clean+'&output=jpg&q=85&w=400';
+}
+
 function loadImgB64(url){
   if(!url) return Promise.resolve({type:'none'});
   if(imgCache[url]!==undefined) return Promise.resolve(imgCache[url]);
+
+  // Try loading via CORS proxy → canvas → base64
   return new Promise(function(resolve){
-    var img=new Image();
-    img.crossOrigin='anonymous';
-    var timer=setTimeout(function(){
-      // Canvas timed out — store URL for path fallback
-      imgCache[url]={type:'path', url:url};
-      resolve(imgCache[url]);
-    },8000);
-    img.onload=function(){
-      clearTimeout(timer);
-      try{
-        var c=document.createElement('canvas');
-        var scale=Math.min(1,600/Math.max(img.naturalWidth,img.naturalHeight,1));
-        c.width =Math.round(img.naturalWidth *scale);
-        c.height=Math.round(img.naturalHeight*scale);
-        c.getContext('2d').drawImage(img,0,0,c.width,c.height);
-        var b64=c.toDataURL('image/jpeg',0.82).split(',')[1];
-        imgCache[url]={type:'data', data:'image/jpeg;base64,'+b64};
-        resolve(imgCache[url]);
-      } catch(e){
-        // Tainted canvas — use path fallback
-        imgCache[url]={type:'path', url:url};
-        resolve(imgCache[url]);
-      }
-    };
-    img.onerror=function(){
-      clearTimeout(timer);
-      imgCache[url]={type:'path', url:url};
-      resolve(imgCache[url]);
-    };
-    img.src=url;
+    var resolved=false;
+    function done(result){ if(!resolved){ resolved=true; imgCache[url]=result; resolve(result); } }
+
+    function tryLoad(src, isFallback){
+      var img=new Image();
+      img.crossOrigin='anonymous';
+      var timer=setTimeout(function(){
+        if(!isFallback) tryLoad(proxyUrl(url), true);
+        else done({type:'none'});
+      }, 8000);
+      img.onload=function(){
+        clearTimeout(timer);
+        if(resolved) return;
+        try{
+          var c=document.createElement('canvas');
+          var scale=Math.min(1,800/Math.max(img.naturalWidth,img.naturalHeight,1));
+          c.width=Math.round(img.naturalWidth*scale);
+          c.height=Math.round(img.naturalHeight*scale);
+          c.getContext('2d').drawImage(img,0,0,c.width,c.height);
+          var b64=c.toDataURL('image/jpeg',0.85).split(',')[1];
+          done({type:'data', data:'image/jpeg;base64,'+b64});
+        } catch(e){
+          // Canvas tainted - try proxy if not already
+          if(!isFallback) tryLoad(proxyUrl(url), true);
+          else done({type:'none'});
+        }
+      };
+      img.onerror=function(){
+        clearTimeout(timer);
+        if(!isFallback) tryLoad(proxyUrl(url), true);
+        else done({type:'none'});
+      };
+      img.src=src;
+    }
+
+    tryLoad(url, false);
   });
 }
 
-// Add image to slide — handles both base64 and path URL
+// Add image to slide — base64 only (path: causes XHR CORS errors in PptxGenJS)
 function addImg(slide, result, opts){
   if(!result||result.type==='none') return false;
-  try{
-    if(result.type==='data'){
+  if(result.type==='data'){
+    try{
       slide.addImage(Object.assign({data:result.data},opts));
-    } else {
-      // path: PowerPoint fetches it on open (needs internet)
-      slide.addImage(Object.assign({path:result.url},opts));
-    }
-    return true;
-  } catch(e){ return false; }
+      return true;
+    } catch(e){ return false; }
+  }
+  // path: type skipped — PptxGenJS XHR is CORS blocked
+  return false;
 }
 
 // Flag: Column AP = 'Flag SVG', value like 'AE.ai' → strip .ai → flagcdn
@@ -492,13 +520,18 @@ function loadFlag(row){
   var code=raw.replace(/\.ai$/i,'').toLowerCase().trim();
   if(!code||code.length>3) return Promise.resolve(null);
   if(flagCache[code]!==undefined) return Promise.resolve(flagCache[code]);
-  return loadImgB64('https://flagcdn.com/w80/'+code+'.png')
-    .then(function(r){ flagCache[code]=r; return r; });
+  // Try canvas load — only works if flagcdn.com allows CORS (it does)
+  return loadImgB64('https://images.weserv.nl/?url=flagcdn.com/w80/'+code+'.png&output=png')
+    .then(function(r){
+      // Only use if we got actual data, not path fallback
+      var result = (r && r.type==='data') ? r : null;
+      flagCache[code]=result; return result;
+    });
 }
 
 async function preloadBatch(urls,onProg){
   var unique=[...new Set(urls.filter(Boolean))];
-  var BATCH=8;
+  var BATCH=6;
   for(var i=0;i<unique.length;i+=BATCH){
     await Promise.all(unique.slice(i,i+BATCH).map(loadImgB64));
     onProg(Math.min(i+BATCH,unique.length),unique.length);
@@ -508,7 +541,7 @@ async function preloadBatch(urls,onProg){
 
 // ── Placeholder helpers — clean box only, no icons ──
 function addPicPlaceholder(slide,x,y,w,h){
-  slide.addShape('rect',{x:x,y:y,w:w,h:h, fill:{color:'D6E4ED'}, line:{color:'9BBDD1',width:1.5}});
+  slide.addShape('rect',{x:x,y:y,w:w,h:h, fill:{color:'D6E4ED'}, line:{color:'D6E4ED',width:0}});
 }
 function addCirclePlaceholder(slide,x,y,w,h){
   slide.addShape('ellipse',{x:x,y:y,w:w,h:h, fill:{color:'D6E4ED'}, line:{color:'9BBDD1',width:1.5}});
@@ -574,8 +607,8 @@ async function generate(){
   var CXL_L=[7.293,8.793,10.289,11.785];
   var CXL_R=[0.570,2.070,3.570,5.070];
   var CPW=0.987, CPH=0.988;
-  var FLW=0.984, FLH=0.304;
-  var TXW=1.305, TXH=0.810;
+  var FLW=0.55, FLH=0.33;
+  var TXW=1.305, TXH=0.95;
   var FLY=4.793, PHY=5.194, TXY=6.349;
 
   try{
@@ -583,16 +616,14 @@ async function generate(){
     if(typeFilter){
       var s0=pres.addSlide();
       s0.background={color:NAVY};
-      // Top & bottom bars
-      s0.addImage({data:BAR_DATA, x:0, y:0.01, w:13.33, h:0.18});
-      s0.addImage({data:BAR_DATA, x:0, y:7.32, w:13.33, h:0.18});
-      // Left image placeholder (dark blue box)
-      s0.addShape('rect',{x:0,y:0,w:6.662,h:7.5, fill:{color:'0A1F33'}, line:{color:'1A3A55',width:1}});
-      // Type name right side, white, large
+      // Top & bottom teal bars
+      s0.addShape('rect',{x:0,y:0,   w:13.33,h:0.20, fill:{color:'156082'}, line:{color:'156082',width:0}});
+      s0.addShape('rect',{x:0,y:7.30,w:13.33,h:0.20, fill:{color:'156082'}, line:{color:'156082',width:0}});
+      // Type name fully centered on navy background
       s0.addText(typeFilter,{
-        x:7.00, y:2.50, w:5.90, h:2.50,
-        fontSize:44, bold:true, color:WHITE, fontFace:FT,
-        align:'left', valign:'middle', margin:0
+        x:0.50, y:2.50, w:12.33, h:2.50,
+        fontSize:52, bold:true, color:WHITE, fontFace:FT,
+        align:'center', valign:'middle', margin:0
       });
     }
 
@@ -611,8 +642,8 @@ async function generate(){
       var cardXs=photosLeft?CXL_L:CXL_R;
 
       // Bars
-      slide.addImage({data:BAR_DATA, x:0, y:0.01, w:13.33, h:0.18});
-      slide.addImage({data:BAR_DATA, x:0, y:7.32, w:13.33, h:0.18});
+      slide.addShape('rect',{x:0,y:0,   w:13.33,h:0.20, fill:{color:'156082'}, line:{color:'156082',width:0}});
+      slide.addShape('rect',{x:0,y:7.30,w:13.33,h:0.20, fill:{color:'156082'}, line:{color:'156082',width:0}});
 
       // ── 2×3 photo grid — flush, zero gaps ──
       var sorted=g.rows.slice().sort(catSort);
@@ -640,9 +671,9 @@ async function generate(){
       // Session brief
       if(g.brief&&g.brief.trim()){
         slide.addText(g.brief.replace(/\n/g,' ').replace(/\s+/g,' ').trim().substring(0,350),{
-          x:CX,y:1.439,w:CW,h:1.403,
-          fontSize:8.5,color:NAVY,fontFace:FB,
-          align:txtAlign,valign:'top',lineSpacingMultiple:1.3,margin:0
+          x:CX,y:1.22,w:CW,h:1.62,
+          fontSize:9,color:NAVY,fontFace:FB,
+          align:txtAlign,valign:'top',lineSpacingMultiple:1.1,margin:0
         });
       }
 
@@ -687,19 +718,19 @@ async function generate(){
         if(isHead&&!skipPhotos){
           var fR=await loadFlag(sp);
           if(fR&&fR.type!=='none'){
-            addImg(slide,fR,{x:kx,y:FLY,w:FLW,h:FLH, sizing:{type:'contain',w:FLW,h:FLH}});
+            addImg(slide,fR,{x:kx+(CPW-FLW)/2,y:FLY+(FLH*0.1),w:FLW,h:FLH, sizing:{type:'contain',w:FLW,h:FLH}});
           } else {
-            addLogoPlaceholder(slide,kx,FLY,FLW,FLH,sp['Country']||'');
+            addLogoPlaceholder(slide,kx+(CPW-FLW)/2,FLY,FLW,FLH,sp['Country']||'');
           }
         } else {
           var logoVal=(sp['Logo']||'').trim();
           if(logoVal&&logoVal.startsWith('http')&&!skipPhotos){
             var lR=imgCache[logoVal]||await loadImgB64(logoVal);
             if(lR&&lR.type!=='none'){
-              addImg(slide,lR,{x:kx,y:FLY,w:FLW,h:FLH, sizing:{type:'contain',w:FLW,h:FLH}});
-            } else { addLogoPlaceholder(slide,kx,FLY,FLW,FLH,logoVal); }
+              addImg(slide,lR,{x:kx+(CPW-FLW)/2,y:FLY+(FLH*0.1),w:FLW,h:FLH, sizing:{type:'contain',w:FLW,h:FLH}});
+            } else { addLogoPlaceholder(slide,kx+(CPW-FLW)/2,FLY,FLW,FLH,logoVal); }
           } else if(logoVal){
-            addLogoPlaceholder(slide,kx,FLY,FLW,FLH,logoVal);
+            addLogoPlaceholder(slide,kx+(CPW-FLW)/2,FLY,FLW,FLH,logoVal);
           }
         }
 
@@ -736,6 +767,9 @@ async function generate(){
 
   // Save
   setProg(97,'Saving...'); await yld();
+  // Suppress image load errors from PptxGenJS library
+  var origAlert = window.alert;
+  window.alert = function(msg){ if(msg && msg.toString().includes('Unable to load image')){ console.warn('Image CORS blocked (will load in PowerPoint):', msg); } else { origAlert(msg); } };
   try{
     var ab  =await pres.write({outputType:'arraybuffer'});
     var blob=new Blob([ab],{type:'application/vnd.openxmlformats-officedocument.presentationml.presentation'});
@@ -744,6 +778,7 @@ async function generate(){
     a.href=url; a.download='WGS_Speakers.pptx';
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
     URL.revokeObjectURL(url);
+    window.alert = origAlert; // restore alert
   } catch(saveErr){
     alert('Save error: '+saveErr.message);
     btn.disabled=false; btn.innerHTML='<span>⚡</span> Generate PowerPoint';
