@@ -284,8 +284,15 @@ function setLang(lang){
 }
 
 // Exact Sub Category values from CSV
-var CAT_ORDER = {'VVIP':0,'VIP':1,'General participant':2,'General Participants':2,'General Participant':2,'General':3,'':4};
-function catSort(a,b){ var x=CAT_ORDER[a['Sub Category']]; var y=CAT_ORDER[b['Sub Category']]; return (x!==undefined?x:4)-(y!==undefined?y:4); }
+var CAT_ORDER = {'VVIP':0,'VIP':1,'General participant':2,'General Participants':2,'General Participant':2,'General':3,'':8};
+function catRank(r){
+  var base=CAT_ORDER[r['Sub Category']];
+  if(base===undefined) base=8;
+  var isMod=(r['Moderator']||'').trim()==='1';
+  // Moderators pushed after all non-moderators of same category
+  return isMod ? base+4 : base;
+}
+function catSort(a,b){ return catRank(a)-catRank(b); }
 
 document.addEventListener('DOMContentLoaded', function(){
   var uz=document.getElementById('upzone');
@@ -348,7 +355,8 @@ function repopFilters(){
   var fprog=document.getElementById('fprog');
   var savedProg=fprog.value;
   fprog.innerHTML='<option value="">All Programs</option>';
-  uniqWhere(C.program,function(r){
+  // Always show English program names in filter
+  uniqWhere('Program En',function(r){
     if(vday  && String(r['Day']||'').trim()!==vday)  return false;
     if(vtype && (r['Type']||'').trim()!==vtype)       return false;
     return true;
@@ -369,7 +377,7 @@ function getFiltered(){
   return allRows.filter(function(r){
     if(vday  && String(r['Day']||'').trim()!==vday)  return false;
     if(vtype && (r['Type']||'').trim()!==vtype)       return false;
-    if(vprog && (r[C.program]||'').trim()!==vprog)    return false;
+    if(vprog && (r['Program En']||'').trim()!==vprog) return false;
     return true;
   });
 }
@@ -381,8 +389,11 @@ function groupByProgram(rows){
 
   // Step 1: collect all rows per program (no dedup yet)
   rows.forEach(function(r){
-    var key=(r[C.program]||'').trim().replace(/\s+$/,''); if(!key) return;
-    if(!m.has(key)) m.set(key,{program:key,type:(r['Type']||'').trim(),rows:[],sessions:new Set()});
+    // Always group by English program name for consistency
+    var key=(r['Program En']||'').trim().replace(/\s+$/,''); if(!key) return;
+    // Display name uses selected language
+    var displayName=(r[C.program]||'').trim().replace(/\s+$/,'')||key;
+    if(!m.has(key)) m.set(key,{program:displayName,type:(r['Type']||'').trim(),rows:[],sessions:new Set()});
     var g=m.get(key);
     g.rows.push(r);
     var s=(r['Session EN']||'').trim(); if(s) g.sessions.add(s);
@@ -464,40 +475,48 @@ function loadImgB64(url){
   if(!url) return Promise.resolve({type:'none'});
   if(imgCache[url]!==undefined) return Promise.resolve(imgCache[url]);
 
-  // WGS image server uses host whitelist (x-deny-reason: host_not_allowed)
-  // Only the browser can fetch these images directly as <img> tags
-  // We use a hidden img + canvas approach: load without crossOrigin first to 
-  // confirm it loads, then try canvas. If tainted, return none quickly.
+  // Images are publicly accessible - try fetch API which may succeed where XHR fails
   return new Promise(function(resolve){
     var resolved=false;
     function done(result){ if(!resolved){ resolved=true; imgCache[url]=result; resolve(result); } }
+    var timer=setTimeout(function(){ done({type:'none'}); }, 12000);
 
-    // Try loading directly (no crossOrigin) to check if image exists
-    var testImg=new Image();
-    var timer=setTimeout(function(){ done({type:'none'}); }, 8000);
-    testImg.onload=function(){
-      clearTimeout(timer); if(resolved) return;
-      // Image loaded in browser — try canvas with crossOrigin on a fresh load
-      var img2=new Image();
-      img2.crossOrigin='anonymous';
-      var timer2=setTimeout(function(){ done({type:'none'}); }, 5000);
-      img2.onload=function(){
-        clearTimeout(timer2); if(resolved) return;
+    // Try fetch with cors mode first
+    fetch(url, {mode:'cors', cache:'force-cache'})
+      .then(function(r){ return r.ok ? r.blob() : Promise.reject('not ok'); })
+      .then(function(blob){
+        var reader=new FileReader();
+        reader.onloadend=function(){
+          clearTimeout(timer);
+          var b64=reader.result.split(',')[1];
+          var mime=blob.type||'image/jpeg';
+          done({type:'data',data:mime+';base64,'+b64});
+        };
+        reader.onerror=function(){ tryCanvas(); };
+        reader.readAsDataURL(blob);
+      })
+      .catch(function(){
+        // fetch cors failed - try canvas with img crossOrigin
+        tryCanvas();
+      });
+
+    function tryCanvas(){
+      var img=new Image();
+      img.crossOrigin='anonymous';
+      var t=setTimeout(function(){ done({type:'none'}); },8000);
+      img.onload=function(){
+        clearTimeout(t); if(resolved) return;
         try{
           var c=document.createElement('canvas');
-          var scale=Math.min(1,600/Math.max(img2.naturalWidth,img2.naturalHeight,1));
-          c.width=Math.round(img2.naturalWidth*scale);
-          c.height=Math.round(img2.naturalHeight*scale);
-          c.getContext('2d').drawImage(img2,0,0,c.width,c.height);
-          var b64=c.toDataURL('image/jpeg',0.85).split(',')[1];
-          done({type:'data',data:'image/jpeg;base64,'+b64});
+          var s=Math.min(1,600/Math.max(img.naturalWidth,img.naturalHeight,1));
+          c.width=Math.round(img.naturalWidth*s); c.height=Math.round(img.naturalHeight*s);
+          c.getContext('2d').drawImage(img,0,0,c.width,c.height);
+          done({type:'data',data:'image/jpeg;base64,'+c.toDataURL('image/jpeg',0.85).split(',')[1]});
         } catch(e){ done({type:'none'}); }
       };
-      img2.onerror=function(){ clearTimeout(timer2); done({type:'none'}); };
-      img2.src=url+'?cors=1&t='+Date.now(); // cache-bust for crossOrigin attempt
-    };
-    testImg.onerror=function(){ clearTimeout(timer); done({type:'none'}); };
-    testImg.src=url;
+      img.onerror=function(){ clearTimeout(t); done({type:'none'}); };
+      img.src=url;
+    }
   });
 }
 
@@ -609,8 +628,8 @@ async function generate(){
   var CXL_L=[7.293,8.793,10.289,11.785];
   var CXL_R=[0.570,2.070,3.570,5.070];
   var CPW=0.987, CPH=0.988;
-  var FLW=0.33, FLH=0.20;
-  var TXW=1.305, TXH=0.95;
+  var FLW=0.40, FLH=0.22;
+  var TXW=1.40, TXH=0.95;
   var FLY=4.493, PHY=4.894, TXY=6.049;
 
   try{
@@ -686,9 +705,9 @@ async function generate(){
       var lbl1=overLbl1||(isAR?'جلسة':'Sessions');
       var lbl2=overLbl2||(isAR?'مشارك':'Participants');
 
-      slide.addText(num1,{x:isAR?CX+CW-2.60:CX, y:3.130,w:2.60,h:0.420,fontSize:26,bold:true, color:TEAL,  fontFace:isAR?FTA:FT,align:isAR?'right':'left',margin:0,rtlMode:isAR});
+      slide.addText(num1,{x:isAR?CX+CW-2.60:CX, y:3.130,w:2.60,h:0.420,fontSize:26,bold:true, color:TEAL,  fontFace:FT,align:isAR?'right':'left',margin:0,rtlMode:isAR});
       slide.addText(lbl1,{x:isAR?CX+CW-2.60:CX, y:3.560,w:2.60,h:0.260,fontSize:8, bold:false,color:LGREY, fontFace:isAR?FBA:FB,align:isAR?'right':'left',margin:0,rtlMode:isAR});
-      slide.addText(num2,{x:isAR?CX:CX+3.00, y:3.130,w:2.60,h:0.420,fontSize:26,bold:true, color:ORANGE,fontFace:isAR?FTA:FT,align:isAR?'right':'left',margin:0,rtlMode:isAR});
+      slide.addText(num2,{x:isAR?CX:CX+3.00, y:3.130,w:2.60,h:0.420,fontSize:26,bold:true, color:ORANGE,fontFace:FT,align:isAR?'right':'left',margin:0,rtlMode:isAR});
       slide.addText(lbl2,{x:isAR?CX:CX+3.00, y:3.560,w:2.60,h:0.260,fontSize:8, bold:false,color:LGREY, fontFace:isAR?FBA:FB,align:isAR?'right':'left',margin:0,rtlMode:isAR});
 
       // Participants label
