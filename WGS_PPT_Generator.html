@@ -260,7 +260,7 @@ var GREY   = '6B7280';
 var LGREY  = '9CA3AF';
 var WHITE  = 'FFFFFF';
 var FT='Certo Sans'; var FB='Logical';
-var FTA='ITC Handel Gothic Arabic - Bold'; var FBA='SST Arabic - Roman';
+var FTA='ITC Handel Gothic Arabic'; var FBA='SST Arabic - Roman';
 
 function cols(){
   if(currentLang==='ar') return {
@@ -456,37 +456,48 @@ function captureImgFromDOM(url){
 
 // Proxy URL for fresh loads
 function proxyUrl(url){
-  var clean=url.replace(/^https?:\/\//,'').replace(/ /g,'%20');
-  return 'https://images.weserv.nl/?url='+clean+'&output=jpg&q=85&w=400';
+  // corsproxy.io passes through original headers allowing image fetch
+  return 'https://corsproxy.io/?url='+encodeURIComponent(url);
 }
 
 function loadImgB64(url){
   if(!url) return Promise.resolve({type:'none'});
   if(imgCache[url]!==undefined) return Promise.resolve(imgCache[url]);
 
-  // Load via proxy which returns CORS headers → canvas can read it
+  // WGS image server uses host whitelist (x-deny-reason: host_not_allowed)
+  // Only the browser can fetch these images directly as <img> tags
+  // We use a hidden img + canvas approach: load without crossOrigin first to 
+  // confirm it loads, then try canvas. If tainted, return none quickly.
   return new Promise(function(resolve){
     var resolved=false;
     function done(result){ if(!resolved){ resolved=true; imgCache[url]=result; resolve(result); } }
 
-    var proxySrc=proxyUrl(url);
-    var img=new Image();
-    img.crossOrigin='anonymous';
-    var timer=setTimeout(function(){ done({type:'none'}); }, 10000);
-    img.onload=function(){
+    // Try loading directly (no crossOrigin) to check if image exists
+    var testImg=new Image();
+    var timer=setTimeout(function(){ done({type:'none'}); }, 8000);
+    testImg.onload=function(){
       clearTimeout(timer); if(resolved) return;
-      try{
-        var c=document.createElement('canvas');
-        var scale=Math.min(1,600/Math.max(img.naturalWidth,img.naturalHeight,1));
-        c.width=Math.round(img.naturalWidth*scale);
-        c.height=Math.round(img.naturalHeight*scale);
-        c.getContext('2d').drawImage(img,0,0,c.width,c.height);
-        var b64=c.toDataURL('image/jpeg',0.85).split(',')[1];
-        done({type:'data',data:'image/jpeg;base64,'+b64});
-      } catch(e){ done({type:'none'}); }
+      // Image loaded in browser — try canvas with crossOrigin on a fresh load
+      var img2=new Image();
+      img2.crossOrigin='anonymous';
+      var timer2=setTimeout(function(){ done({type:'none'}); }, 5000);
+      img2.onload=function(){
+        clearTimeout(timer2); if(resolved) return;
+        try{
+          var c=document.createElement('canvas');
+          var scale=Math.min(1,600/Math.max(img2.naturalWidth,img2.naturalHeight,1));
+          c.width=Math.round(img2.naturalWidth*scale);
+          c.height=Math.round(img2.naturalHeight*scale);
+          c.getContext('2d').drawImage(img2,0,0,c.width,c.height);
+          var b64=c.toDataURL('image/jpeg',0.85).split(',')[1];
+          done({type:'data',data:'image/jpeg;base64,'+b64});
+        } catch(e){ done({type:'none'}); }
+      };
+      img2.onerror=function(){ clearTimeout(timer2); done({type:'none'}); };
+      img2.src=url+'?cors=1&t='+Date.now(); // cache-bust for crossOrigin attempt
     };
-    img.onerror=function(){ clearTimeout(timer); done({type:'none'}); };
-    img.src=proxySrc;
+    testImg.onerror=function(){ clearTimeout(timer); done({type:'none'}); };
+    testImg.src=url;
   });
 }
 
@@ -675,15 +686,16 @@ async function generate(){
       var lbl1=overLbl1||(isAR?'جلسة':'Sessions');
       var lbl2=overLbl2||(isAR?'مشارك':'Participants');
 
-      slide.addText(num1,{x:isAR?CX+3.00:CX, y:3.130,w:2.60,h:0.420,fontSize:26,bold:true, color:TEAL,  fontFace:isAR?FTA:FT,align:txtAlign,margin:0,rtlMode:isAR});
-      slide.addText(lbl1,{x:isAR?CX+3.00:CX, y:3.560,w:2.60,h:0.260,fontSize:8, bold:false,color:LGREY, fontFace:isAR?FBA:FB,align:txtAlign,margin:0,rtlMode:isAR});
-      slide.addText(num2,{x:isAR?CX:CX+3.00, y:3.130,w:2.60,h:0.420,fontSize:26,bold:true, color:ORANGE,fontFace:isAR?FTA:FT,align:txtAlign,margin:0,rtlMode:isAR});
-      slide.addText(lbl2,{x:isAR?CX:CX+3.00, y:3.560,w:2.60,h:0.260,fontSize:8, bold:false,color:LGREY, fontFace:isAR?FBA:FB,align:txtAlign,margin:0,rtlMode:isAR});
+      slide.addText(num1,{x:isAR?CX+CW-2.60:CX, y:3.130,w:2.60,h:0.420,fontSize:26,bold:true, color:TEAL,  fontFace:isAR?FTA:FT,align:isAR?'right':'left',margin:0,rtlMode:isAR});
+      slide.addText(lbl1,{x:isAR?CX+CW-2.60:CX, y:3.560,w:2.60,h:0.260,fontSize:8, bold:false,color:LGREY, fontFace:isAR?FBA:FB,align:isAR?'right':'left',margin:0,rtlMode:isAR});
+      slide.addText(num2,{x:isAR?CX:CX+3.00, y:3.130,w:2.60,h:0.420,fontSize:26,bold:true, color:ORANGE,fontFace:isAR?FTA:FT,align:isAR?'right':'left',margin:0,rtlMode:isAR});
+      slide.addText(lbl2,{x:isAR?CX:CX+3.00, y:3.560,w:2.60,h:0.260,fontSize:8, bold:false,color:LGREY, fontFace:isAR?FBA:FB,align:isAR?'right':'left',margin:0,rtlMode:isAR});
 
       // Participants label
       slide.addText(isAR?'المشاركون:':'Participants:',{
         x:CX,y:4.151,w:CW,h:0.286,
-        fontSize:9,bold:true,color:TEAL,fontFace:isAR?FTA:FT,align:txtAlign,margin:0,rtlMode:isAR
+        fontSize:9,bold:true,color:TEAL,fontFace:isAR?FTA:FT,
+        align:isAR?'right':'left',margin:0,rtlMode:isAR
       });
 
       // ── 4 speaker cards ──
@@ -710,7 +722,9 @@ async function generate(){
         if(isHead&&!skipPhotos){
           var fR=await loadFlag(sp);
           if(fR&&fR.type!=='none'){
-            addImg(slide,fR,{x:kx+(CPW-FLW)/2,y:FLY+(FLH*0.1),w:FLW,h:FLH, sizing:{type:'contain',w:FLW,h:FLH}});
+            var fx=kx+(CPW-FLW)/2, fy=FLY+(FLH*0.1);
+            addImg(slide,fR,{x:fx,y:fy,w:FLW,h:FLH, sizing:{type:'contain',w:FLW,h:FLH}});
+            slide.addShape('rect',{x:fx,y:fy,w:FLW,h:FLH, fill:{type:'none'}, line:{color:'AAAAAA',width:0.25}});
           } else {
             addLogoPlaceholder(slide,kx+(CPW-FLW)/2,FLY,FLW,FLH,sp['Country']||'');
           }
@@ -740,8 +754,8 @@ async function generate(){
         var desig=(isAR?(sp['Export Desc Ar']||''):(sp['Export Desc En']||'')).trim().substring(0,80);
 
         var lines=[];
-        if(fullName) lines.push({text:fullName,options:{bold:true, fontSize:9,color:NAVY,fontFace:FT,breakLine:true}});
-        if(desig)    lines.push({text:desig,   options:{bold:false,fontSize:9,color:GREY,fontFace:FB,breakLine:false}});
+        if(fullName) lines.push({text:fullName,options:{bold:true, fontSize:9,color:NAVY,fontFace:isAR?FTA:FT,breakLine:true}});
+        if(desig)    lines.push({text:desig,   options:{bold:false,fontSize:9,color:GREY,fontFace:isAR?FBA:FB,breakLine:false}});
         if(lines.length){
           slide.addText(lines,{
             x:kx-0.13,y:TXY,w:TXW,h:TXH,
