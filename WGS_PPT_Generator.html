@@ -435,7 +435,7 @@ function refreshPreview(){
     var jt=(r['Participant Title EN']||'').trim();
     var nm=(jt?jt+' ':'')+(r['Participant Name EN']||'');
     var ph=r['Photo With Path']||'';
-    d.innerHTML=ph?'<img src="'+ph+'" crossorigin="anonymous" onerror="this.style.display=\'none\'" alt=""/><div class="ph2" style="display:none">👤</div>':'<div class="ph2">👤</div>';
+    d.innerHTML=ph?'<img src="'+ph+'" onerror="this.style.display=\'none\'" alt=""/><div class="ph2" style="display:none">👤</div>':'<div class="ph2">👤</div>';
     d.innerHTML+='<div class="pn">'+nm.trim()+'</div><div class="pr">'+(r['Export Desc En']||'')+'</div>';
     grid.appendChild(d);
   });
@@ -449,26 +449,9 @@ function refreshPreview(){
 
 // ── Image loading: canvas first (works file://), fallback to path URL for PowerPoint ──
 var imgCache={};
-// Capture image from already-loaded DOM <img> element (bypasses CORS completely)
+// Capture image via proxy URL → canvas (proxy adds CORS headers)
 function captureImgFromDOM(url){
-  if(!url) return null;
-  // Find any <img> in the page that has this src loaded
-  var imgs=document.querySelectorAll('img');
-  for(var i=0;i<imgs.length;i++){
-    var img=imgs[i];
-    if((img.src===url||img.src===decodeURIComponent(url))&&img.complete&&img.naturalWidth>0){
-      try{
-        var c=document.createElement('canvas');
-        var scale=Math.min(1,600/Math.max(img.naturalWidth,img.naturalHeight,1));
-        c.width=Math.round(img.naturalWidth*scale);
-        c.height=Math.round(img.naturalHeight*scale);
-        c.getContext('2d').drawImage(img,0,0,c.width,c.height);
-        var b64=c.toDataURL('image/jpeg',0.85).split(',')[1];
-        return {type:'data',data:'image/jpeg;base64,'+b64};
-      } catch(e){ return null; }
-    }
-  }
-  return null;
+  return null; // DOM imgs don't have crossorigin, skip to proxy load
 }
 
 // Proxy URL for fresh loads
@@ -481,41 +464,29 @@ function loadImgB64(url){
   if(!url) return Promise.resolve({type:'none'});
   if(imgCache[url]!==undefined) return Promise.resolve(imgCache[url]);
 
-  // Step 1: try capturing from already-rendered DOM img (no CORS issue)
-  var domResult=captureImgFromDOM(url);
-  if(domResult){ imgCache[url]=domResult; return Promise.resolve(domResult); }
-
-  // Step 2: load fresh with crossOrigin + canvas, proxy fallback
+  // Load via proxy which returns CORS headers → canvas can read it
   return new Promise(function(resolve){
     var resolved=false;
     function done(result){ if(!resolved){ resolved=true; imgCache[url]=result; resolve(result); } }
 
-    function tryLoad(src, isFallback){
-      var img=new Image();
-      img.crossOrigin='anonymous';
-      var timer=setTimeout(function(){
-        if(!isFallback) tryLoad(proxyUrl(url),true);
-        else done({type:'none'});
-      },8000);
-      img.onload=function(){
-        clearTimeout(timer); if(resolved) return;
-        try{
-          var c=document.createElement('canvas');
-          var scale=Math.min(1,600/Math.max(img.naturalWidth,img.naturalHeight,1));
-          c.width=Math.round(img.naturalWidth*scale);
-          c.height=Math.round(img.naturalHeight*scale);
-          c.getContext('2d').drawImage(img,0,0,c.width,c.height);
-          var b64=c.toDataURL('image/jpeg',0.85).split(',')[1];
-          done({type:'data',data:'image/jpeg;base64,'+b64});
-        } catch(e){
-          if(!isFallback) tryLoad(proxyUrl(url),true);
-          else done({type:'none'});
-        }
-      };
-      img.onerror=function(){ clearTimeout(timer); if(!isFallback) tryLoad(proxyUrl(url),true); else done({type:'none'}); };
-      img.src=src;
-    }
-    tryLoad(url,false);
+    var proxySrc=proxyUrl(url);
+    var img=new Image();
+    img.crossOrigin='anonymous';
+    var timer=setTimeout(function(){ done({type:'none'}); }, 10000);
+    img.onload=function(){
+      clearTimeout(timer); if(resolved) return;
+      try{
+        var c=document.createElement('canvas');
+        var scale=Math.min(1,600/Math.max(img.naturalWidth,img.naturalHeight,1));
+        c.width=Math.round(img.naturalWidth*scale);
+        c.height=Math.round(img.naturalHeight*scale);
+        c.getContext('2d').drawImage(img,0,0,c.width,c.height);
+        var b64=c.toDataURL('image/jpeg',0.85).split(',')[1];
+        done({type:'data',data:'image/jpeg;base64,'+b64});
+      } catch(e){ done({type:'none'}); }
+    };
+    img.onerror=function(){ clearTimeout(timer); done({type:'none'}); };
+    img.src=proxySrc;
   });
 }
 
