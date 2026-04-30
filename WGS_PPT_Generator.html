@@ -476,8 +476,11 @@ function getPhotoUrl(csvPhotoPath){
   var baseUrl=(document.getElementById('imgBaseUrl')||{}).value||'';
   baseUrl=baseUrl.trim();
   if(baseUrl){
-    // Extract just the filename from the CSV path
+    // Extract filename from CSV path
     var filename=csvPhotoPath.split('/').pop();
+    // Strip the _ID suffix before the extension
+    // e.g. "Irakli Kobakhidze_1768390204.jpg" → "Irakli Kobakhidze.jpg"
+    filename=filename.replace(/_[0-9]+(\.[^.]+)$/, '$1');
     // Ensure base URL ends with /
     if(baseUrl[baseUrl.length-1]!=='/') baseUrl+='/';
     return baseUrl+filename;
