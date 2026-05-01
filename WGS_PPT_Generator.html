@@ -472,21 +472,25 @@ function captureImgFromDOM(url){
 
 // Crop image to exact aspect ratio (cover/fill crop)
 // targetAspect = width/height ratio (e.g. 1.332 for grid, 1.0 for circle)
-function cropToAspect(img, targetAspect){
+// topBias: 0=top, 0.5=center, 1=bottom (default 0.15 = slightly below top for head room)
+function cropToAspect(img, targetAspect, topBias){
+  if(topBias===undefined) topBias=0.15; // keep heads visible
   var srcAspect = img.naturalWidth / img.naturalHeight;
   var sx, sy, sw, sh;
   if(srcAspect > targetAspect){
-    // Source wider — crop left/right
+    // Source wider than target — crop left/right (center horizontally)
     sh = img.naturalHeight;
     sw = Math.round(sh * targetAspect);
     sy = 0;
     sx = Math.round((img.naturalWidth - sw) / 2);
   } else {
-    // Source taller — crop top/bottom
+    // Source taller than target — crop top/bottom
+    // topBias=0 keeps top, 0.5 centers, 1 keeps bottom
     sw = img.naturalWidth;
     sh = Math.round(sw / targetAspect);
     sx = 0;
-    sy = Math.round((img.naturalHeight - sh) / 2);
+    var maxSy = img.naturalHeight - sh;
+    sy = Math.round(maxSy * topBias);
   }
   var maxPx = 800;
   var scale = Math.min(1, maxPx / Math.max(sw, sh));
