@@ -470,31 +470,35 @@ function captureImgFromDOM(url){
   return null; // DOM imgs don't have crossorigin, skip to proxy load
 }
 
-// Crop image canvas to exact aspect ratio (cover crop)
-function cropCanvas(img, targetW, targetH){
+// Crop image to exact aspect ratio (cover/fill crop)
+// targetAspect = width/height ratio (e.g. 1.332 for grid, 1.0 for circle)
+function cropToAspect(img, targetAspect){
   var srcAspect = img.naturalWidth / img.naturalHeight;
-  var tgtAspect = targetW / targetH;
   var sx, sy, sw, sh;
-  if(srcAspect > tgtAspect){
-    // Image wider than target — crop sides
+  if(srcAspect > targetAspect){
+    // Source wider — crop left/right
     sh = img.naturalHeight;
-    sw = sh * tgtAspect;
+    sw = Math.round(sh * targetAspect);
     sy = 0;
-    sx = (img.naturalWidth - sw) / 2;
+    sx = Math.round((img.naturalWidth - sw) / 2);
   } else {
-    // Image taller than target — crop top/bottom
+    // Source taller — crop top/bottom
     sw = img.naturalWidth;
-    sh = sw / tgtAspect;
+    sh = Math.round(sw / targetAspect);
     sx = 0;
-    sy = (img.naturalHeight - sh) / 2;
+    sy = Math.round((img.naturalHeight - sh) / 2);
   }
-  var scale = Math.min(1, 600/Math.max(sw, sh));
+  var maxPx = 800;
+  var scale = Math.min(1, maxPx / Math.max(sw, sh));
   var c = document.createElement('canvas');
   c.width  = Math.round(sw * scale);
   c.height = Math.round(sh * scale);
   c.getContext('2d').drawImage(img, sx, sy, sw, sh, 0, 0, c.width, c.height);
   return c;
 }
+
+// Legacy wrapper
+function cropCanvas(img, w, h){ return cropToAspect(img, w/h); }
 
 // Get the effective photo URL — use custom base URL if set
 function getPhotoUrl(csvPhotoPath){
@@ -520,48 +524,52 @@ function proxyUrl(url){
   return 'https://corsproxy.io/?url='+encodeURIComponent(url);
 }
 
-function loadImgB64(url){
+function loadImgB64(url, aspectRatio){
   if(!url) return Promise.resolve({type:'none'});
-  if(imgCache[url]!==undefined) return Promise.resolve(imgCache[url]);
+  var cacheKey=aspectRatio ? url+'@'+aspectRatio.toFixed(3) : url;
+  if(imgCache[cacheKey]!==undefined) return Promise.resolve(imgCache[cacheKey]);
 
-  // Images are publicly accessible - try fetch API which may succeed where XHR fails
   return new Promise(function(resolve){
     var resolved=false;
-    function done(result){ if(!resolved){ resolved=true; imgCache[url]=result; resolve(result); } }
-    var timer=setTimeout(function(){ done({type:'none'}); }, 12000);
+    function done(r){ if(!resolved){ resolved=true; imgCache[cacheKey]=r; resolve(r); } }
+    var timer=setTimeout(function(){ done({type:'none'}); },12000);
 
-    // Try fetch with cors mode first
-    fetch(url, {mode:'cors', cache:'force-cache'})
-      .then(function(r){ return r.ok ? r.blob() : Promise.reject('not ok'); })
+    function processImg(img){
+      clearTimeout(timer); if(resolved) return;
+      try{
+        var c = aspectRatio ? cropToAspect(img, aspectRatio) : (function(){
+          var cv=document.createElement('canvas');
+          var s=Math.min(1,800/Math.max(img.naturalWidth,img.naturalHeight,1));
+          cv.width=Math.round(img.naturalWidth*s);
+          cv.height=Math.round(img.naturalHeight*s);
+          cv.getContext('2d').drawImage(img,0,0,cv.width,cv.height);
+          return cv;
+        })();
+        done({type:'data',data:'image/jpeg;base64,'+c.toDataURL('image/jpeg',0.88).split(',')[1]});
+      }catch(e){ done({type:'none'}); }
+    }
+
+    // Try fetch first (works when CORS headers present)
+    fetch(url,{mode:'cors',cache:'force-cache'})
+      .then(function(r){ return r.ok?r.blob():Promise.reject(); })
       .then(function(blob){
         var reader=new FileReader();
         reader.onloadend=function(){
-          clearTimeout(timer);
-          var b64=reader.result.split(',')[1];
-          var mime=blob.type||'image/jpeg';
-          done({type:'data',data:mime+';base64,'+b64});
+          var tmp=new Image();
+          tmp.onload=function(){ processImg(tmp); };
+          tmp.onerror=function(){ done({type:'none'}); };
+          tmp.src=reader.result;
         };
-        reader.onerror=function(){ tryCanvas(); };
+        reader.onerror=function(){ tryDirect(); };
         reader.readAsDataURL(blob);
       })
-      .catch(function(){
-        // fetch cors failed - try canvas with img crossOrigin
-        tryCanvas();
-      });
+      .catch(function(){ tryDirect(); });
 
-    function tryCanvas(){
+    function tryDirect(){
       var img=new Image();
       img.crossOrigin='anonymous';
       var t=setTimeout(function(){ done({type:'none'}); },8000);
-      img.onload=function(){
-        clearTimeout(t); if(resolved) return;
-        try{
-          // Use square crop for speaker cards, landscape for grid
-          var targetAR = opts && opts.aspect ? opts.aspect : (img.naturalWidth/img.naturalHeight);
-          var c = cropCanvas(img, img.naturalWidth, img.naturalWidth/targetAR);
-          done({type:'data',data:'image/jpeg;base64,'+c.toDataURL('image/jpeg',0.85).split(',')[1]});
-        } catch(e){ done({type:'none'}); }
-      };
+      img.onload=function(){ clearTimeout(t); processImg(img); };
       img.onerror=function(){ clearTimeout(t); done({type:'none'}); };
       img.src=url;
     }
@@ -652,10 +660,19 @@ async function generate(){
     // Grid photos use landscape aspect (GCW/GCH = 3.331/2.500 = 1.332)
     // Speaker card photos use square aspect (CPW/CPH ≈ 1.0)
     // Store aspect per URL for correct cropping
-    var allUrls=filtered.map(function(r){ return getPhotoUrl(r['Photo With Path']); }).filter(Boolean);
-    await preloadBatch(allUrls,function(done,total){
-      setProg(6+Math.round(done/total*42),'Photos '+done+'/'+total+'...');
-    });
+    var rawUrls=filtered.map(function(r){ return getPhotoUrl(r['Photo With Path']); }).filter(Boolean);
+    var uniqueUrls=[...new Set(rawUrls)];
+    var total=uniqueUrls.length; var loaded=0;
+    for(var pi2=0;pi2<uniqueUrls.length;pi2+=4){
+      var batch=uniqueUrls.slice(pi2,pi2+4);
+      // Load grid aspect (landscape) and square versions simultaneously
+      await Promise.all(batch.map(function(u){
+        return Promise.all([loadImgB64(u, GCW/GCH), loadImgB64(u, 1.0)]);
+      }));
+      loaded=Math.min(pi2+4,total);
+      setProg(6+Math.round(loaded/total*42),'Photos '+loaded+'/'+total+'...');
+      await yld();
+    }
     setProg(50,'Building slides...');
   } else {
     setProg(50,'Building slides (no photos)...');
@@ -747,10 +764,15 @@ async function generate(){
       for(var row=0;row<3;row++){
         for(var col=0;col<2;col++){
           var px=pCols[col], py=GROW[row], pi=row*2+col;
-          var imgR=(!skipPhotos&&g6[pi])?imgCache[getPhotoUrl(g6[pi]['Photo With Path'])]:null;
+          var gridUrl=getPhotoUrl((g6[pi]||{})['Photo With Path']);
+          if(!skipPhotos&&gridUrl&&!imgCache[gridUrl+'@'+( GCW/GCH).toFixed(3)]) await loadImgB64(gridUrl, GCW/GCH);
+          var imgR=(!skipPhotos&&gridUrl)?imgCache[gridUrl+'@'+(GCW/GCH).toFixed(3)]:null;
           var checker=(row+col)%2===0;
           if(imgR&&imgR.type!=='none'){
-            var added=addImg(slide,imgR,{x:px,y:py,w:GCW,h:GCH});
+            // Image already loaded - create img element to crop
+            var gridData=imgR.data;
+            var added=addImg(slide,{type:'data',data:gridData},{x:px,y:py,w:GCW,h:GCH,
+              sizing:{type:'cover',w:GCW,h:GCH}});
             if(!added) addPicPlaceholder(slide,px,py,GCW,GCH,checker);
           } else {
             addPicPlaceholder(slide,px,py,GCW,GCH,checker);
@@ -806,9 +828,12 @@ async function generate(){
 
         // Speaker photo
         var pUrl=getPhotoUrl(sp['Photo With Path']||'')||'';
-        var pR  =(!skipPhotos&&pUrl)?imgCache[pUrl]:null;
+        // Load speaker photo with square crop (1:1 aspect)
+        if(!skipPhotos&&pUrl&&!imgCache[pUrl+'@1.000']) await loadImgB64(pUrl, 1.0);
+        var pR=(!skipPhotos&&pUrl)?(imgCache[pUrl+'@1.000']||imgCache[pUrl]):null;
         if(pR&&pR.type!=='none'){
-          var ok=addImg(slide,pR,{x:kx,y:PHY,w:CPW,h:CPH, rounding:true});
+          var ok=addImg(slide,pR,{x:kx,y:PHY,w:CPW,h:CPH,rounding:true,
+            sizing:{type:'cover',w:CPW,h:CPH}});
           if(!ok) addCirclePlaceholder(slide,kx,PHY,CPW,CPH);
         } else {
           addCirclePlaceholder(slide,kx,PHY,CPW,CPH);
